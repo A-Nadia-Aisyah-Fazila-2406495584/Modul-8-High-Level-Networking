@@ -1,38 +1,48 @@
 # Reflection
 
 **1. What are the key differences between unary, server streaming, and bi-directional streaming RPC (Remote Procedure Call) methods, and in what scenarios would each be most suitable?**
+
     - **Unary:** client kirim satu request, server balas satu response. Biasanya cocok untuk hal-hal seperti proses pembayaran atau autentikasi yang memang cukup sekali tanya dan sekali jawab.
     - **Server streaming:** client only kirim satu request, tapi server bisa balas berkali-kali dalam bentuk stream. Cocok untuk kasus seperti ambil riwayat transaksi yang datanya banyak atau live update harga saham.
     - **Bi-directional streaming:** kedua pihak bisa kirim dan terima pesan kapan saja dan secara bersamaan. Ini yang paling cocok untuk chat, game multiplayer yang real time, atau kolaborasi pada dokumen seperti Google Docs.
 
 **2. What are the potential security considerations involved in implementing a gRPC service in Rust, particularly regarding authentication, authorization, and data encryption?**
+
     - Secara default koneksi gRPC tidak terenkripsi, jadi hal pertama yang harus dilakukan adalah pasang TLS. Di Tonic bisa pakai `tls_config()`.
         - **Untuk autentikasi:** yang umum dipakai adalah JWT token yang dikirim lewat metadata di tiap request. Server lalu perlu interceptor yang validate token itu sebelum request sampai ke handler.
         - **Untuk otorisasi:** perlu ada pengecekan apakah user yang sudah terautentikasi punya hak akses ke resource tertentu. Ini biasanya dikerjakan di layer service dan bukan di transport layer.
 
 **3. What are the potential challenges or issues that may arise when handling bidirectional streaming in Rust gRPC, especially in scenarios like chat applications?**
+
     - Yang paling sering adalah manajemen koneksi yang terputus tiba-tiba. Kalau client disconnect di tengah stream jadinya server harus bisa handle itu dengan graceful tanpa crash. Selain itu backpressure, jika clientnya lambat baca tapi server terus kirim, channel buffer bisa penuh dan sistem jadi tidak responsif makannya perlu dipilih ukuran buffer yang tepat. Di Rust khususnya, karena sistem ownershipnya strict, passing data antar async task itu butuh extra perhatian, jika salah handle bisa terjadi deadlock atau data tidak terkirim sama sekali. 
 
 **4. What are the advantages and disadvantages of using the tokio_stream::wrappers::ReceiverStream for streaming responses in Rust gRPC services?**
+
     - **Advantages:** `ReceiverStream` itu jembatan antara channel tokio dengan interface streaming yang dibutuhkan tonic. Tidak perlu implementasi `Stream` dari nol dan tinggal langsung pakai aja.
     - **Disadvantages:** karena berbasis bounded channel, jika buffer sudah penuh sender akan nunggu hingga ada slot yang kosong. Ini bisa jadi bottleneck jika kapasitas buffernya tidak disesuaikan dengan kebutuhan. Selain itu, error handlingnya cukup terbatas, jika sendernya drop atau panic di tengah jalan, receiver hanya dapat `None` dan stream berhenti begitu saja tanpa pesan error yang informatif, yang membuat jadi lumayan sulit waktu debugging.
 
 **5. In what ways could the Rust gRPC code be structured to facilitate code reuse and modularity, promoting maintainability and extensibility over time?**
+
     - Hal yang paling membantu adalah memisahkan implementasi tiap service ke file tersendiri. Daripada semua ditumpuk di satu file, lebih baik buat `payment_service.rs`, `transaction_service.rs`, `chat_service.rs` masing-masing berdiri sendiri. Jadi jika ada yang perlu diubah, mudah dicarinya. Selain itu, hal-hal yang dipakai bersama seperti error handling, koneksi database, atau validasi input sebaiknya dikumpulkan di shared module. Kalau ada logic yang mirip antara beberapa service, buat saja trait atau helper function yang bisa direuse supaya tidak copas kode ke sana-sini.
 
 **6. In the MyPaymentService implementation, what additional steps might be necessary to handle more complex payment processing logic?**
+
     - Implementasi sekarang cuma langsung return `success: true` tanpa benar-benar ngapa-ngapain. Untuk production, setidaknya perlu beberapa hal tambahan yaitu validasi input apakah amountnya valid, apakah user_idnya ada di database, dll. Setelah itu baru koneksi ke payment gateway seperti Stripe atau Midtrans untuk memproses transaksi yang sebenarnya. Record transaksi juga perlu disimpan ke database, bukan hanya dikembalikan sebagai response. Selain itu, mekanisme rollback juga penting, jika transaksi gagal di tengah jalan, harus ada cara untuk memastikan tidak ada state yang setengah-setengah. Selain itu, idempotency key juga penting supaya jika request dikirim dua kali karena retry, transaksinya tidak ikutan double.
 
 **7. What impact does the adoption of gRPC as a communication protocol have on the overall architecture and design of distributed systems, particularly in terms of interoperability with other technologies and platforms?**
+
     - gRPC mendorong arsitektur yang lebih contract-first, semua interface didefinisikan dulu di `.proto` file sebelum implementasi. Ini bagus untuk tim yang besar karena semua pihak punya kontrak yang sama. Tapi, ada trade off yaitu tidak semua platform support gRPC dengan baik, terutama browser. Inilah yang bikin gRPC lebih cocok untuk komunikasi antar service internal, bukan untuk public API yang diakses langsung dari browser.
 
 **8. What are the advantages and disadvantages of using HTTP/2, the underlying protocol for gRPC, compared to HTTP/1.1 or HTTP/1.1 with WebSocket for REST APIs?**
+
     - HTTP/2 punya multiplexing, jadi bisa kirim banyak request sekaligus dalam satu koneksi tanpa harus antri. Di HTTP/1.1, tiap request harus antri nunggu giliran, yang sering disebut dengan head of line blocking. Header compression di HTTP/2 juga bikin payload lebih kecil. Tapi, setupnya lebih ribet dan debuggingnya lebih susah karena binary bukan plain text dan tidak semua tool atau proxy support HTTP/2 dengan baik. WebSocket di HTTP/1.1 bisa dapat real time communication, tapi tdk bisa multiplexing dan perlu upgrade protocol tersendiri.
 
 **9. How does the request-response model of REST APIs contrast with the bidirectional streaming capabilities of gRPC in terms of real-time communication and responsiveness?**
+
     - REST itu always satu arah, client minta, server jawab, koneksi selesai. Untuk real time, terpaksa pakai polling (request berulang-ulang) atau SSE yang terbatas.
     - RPC dengan bi-directional streaming bisa maintain satu koneksi yang hidup terus dan kedua pihak bisa kirim data kapan saja tanpa perlu buka koneksi baru. Untuk chat atau live dashboard, ini jauh lebih efisien karena tidak ada overhead buka tutup koneksi terus-menerus.
 
 **10. What are the implications of the schema-based approach of gRPC, using Protocol Buffers, compared to the more flexible, schema-less nature of JSON in REST API payloads?**
+
     - Dengan Protocol Buffers, semua struktur data harus didefinisikan dulu di file `.proto`. Di awal memang terasa ribet, tapi manfaatnya besar yaitu tidak bisa sembarangan kirim field yang salah, typo nama field langsung ketahuan, dan karena formatnya binary, serialisasi jauh lebih kecil dan cepat.
     - JSON lebih fleksibel karena bisa tambah field baru tanpa mengubah schema, cocok untuk prototyping cepat. Tapi fleksibilitas ini juga jadi kelemahannya, tidak ada enforcement yang ketat, sehingga jika tidak dijaga dengan baik bisa muncul inkonsistensi antar service, misalnya satu service pakai `userId` sementara yang lain pakai `user_id`.
